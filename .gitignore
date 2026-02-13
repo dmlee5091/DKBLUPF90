@@ -1,16 +1,16 @@
-# Build artifacts
+# Build artifacts - temporary compilation files
 *.o
 *.mod
-*.exe
-*.out
-*.geno
-*.geno.gz
 
-# Build directories
-build/
-bin/
-lib/
-include/
+# Generated output files
+*.out
+
+# Test output files only
+ReadFR/check/GENO_QC_*.geno
+ReadFR/check/GENO_QC_*.geno.gz
+
+# Keep build directories and their important files
+# (executable, libraries, and module files are tracked)
 
 # Compiler-generated files
 *.f90~
