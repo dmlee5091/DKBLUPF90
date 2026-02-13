@@ -1,0 +1,47 @@
+# Build artifacts
+*.o
+*.mod
+*.exe
+*.out
+*.geno
+*.geno.gz
+
+# Build directories
+build/
+bin/
+lib/
+include/
+
+# Compiler-generated files
+*.f90~
+*.f90.bak
+*.txt~
+
+# Test outputs
+test_output.txt
+*.tmp
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS-specific files
+Thumbs.db
+.directory
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Temporary files
+*.tmp
+*.temp
+
+# Large data files (keep examples only)
+ReadFR/check/GENO_QC_*
+*.geno
