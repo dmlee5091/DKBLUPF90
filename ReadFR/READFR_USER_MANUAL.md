@@ -87,14 +87,14 @@ ReadFR is a high-performance Fortran program designed for comprehensive quality 
 ### Quick Installation (System-wide)
 
 ```bash
-cd DKBLUPF90
+cd GPBLUP
 sudo ./install.sh
 ```
 
 ### User Directory Installation (No root required)
 
 ```bash
-cd DKBLUPF90
+cd GPBLUP
 PREFIX=$HOME/.local ./install.sh
 export PATH="$HOME/.local/bin:$PATH"
 export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"
@@ -626,7 +626,7 @@ For technical support:
 
 ## License
 
-DKBLUPF90 and ReadFR are released under the MIT License.
+GPBLUP and ReadFR are released under the MIT License.
 
 ---
 
