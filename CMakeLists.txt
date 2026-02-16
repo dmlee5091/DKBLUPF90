@@ -33,7 +33,6 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # Include directories
 include_directories(${CMAKE_BINARY_DIR}/modules)
-include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # Source modules from source directory
 set(MODULE_SOURCES

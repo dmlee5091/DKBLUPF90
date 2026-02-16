@@ -2,7 +2,7 @@ program ReadFR
   use M_Kinds
   use M_Stamp
   use M_Variables, only: FileInfo, SNPInfo, PEDInfo, QC_Metrics, QC_Counters, &
-                         PEDFile, DATAFile, SNPFile, MAPFile, OutputPrefix, &
+                         PEDFile, SNPFile, MAPFile, OutputPrefix, &
                          MAX_STR, MAX_VAR, LEN_STR
   use M_StrEdit
   use M_ReadFile
@@ -20,7 +20,7 @@ program ReadFR
   type(SNPInfo),allocatable :: MapInfo(:)
   logical :: file_exists
   
-   integer :: unitGENO, unitF, n, i, j, k1, k2, animal_field_idx, snp_name_idx
+   integer :: unitGENO, unitF, n, i, j, animal_field_idx, snp_name_idx
    integer :: NREC, nSNP, NARN, tSNP, count_miss
    integer :: countX(3), countY(3), countY_hetero_errors
    integer :: total_animals, animals_retained, animals_low_callrate, snp_count
@@ -30,17 +30,16 @@ program ReadFR
    integer :: idx_gt_score, idx_cluster_sep
    character(len=1) :: Allele1, Allele2
    character(len=MAX_STR) :: GenoFileName
-   character(len=LEN_STR) :: Animal_ID, Animal_ARN, Previous_Animal, Sample_Name, temp_str
+   character(len=LEN_STR) :: Previous_Animal, Sample_Name
    character(len=LEN_STR) :: Animal_Field_Name, Current_SNP_Name
    logical :: snp_order_verified
   integer(kind=ki1) :: genotype
-  logical :: found_ped
+  logical :: found_ped = .false.
   real :: call_rate_animal
   real :: thresh_min_gc, thresh_min_r, thresh_max_r
   real :: thresh_min_gt, thresh_min_cluster, thresh_min_callrate
   
-  type(QC_Metrics) :: local_qc_metrics
-  type(QC_Counters) :: local_qc_counters, global_qc_counters
+
 
    call version('1.0 - GenomeQC SNP Quality Control Pipeline')
    print '(a)'
@@ -74,16 +73,11 @@ program ReadFR
    
    ! Determine animal field name from parameter (ANIMAL_ARN or ANIMAL_ID)
    ! Must do this BEFORE loading PED file so we know which key to use for hashing
-   animal_field_idx = find_field_index('ANIMAL_ARN', SNPFile%FieldName)
-   if (animal_field_idx > 0) then
-      Animal_Field_Name = 'ANIMAL_ARN'
-   else
-      animal_field_idx = find_field_index('ANIMAL_ID', SNPFile%FieldName)
-      if (animal_field_idx > 0) then
-         Animal_Field_Name = 'ANIMAL_ID'
-      else
-         stop 'ERROR: Neither ANIMAL_ARN nor ANIMAL_ID found in SNP file parameters'
-      end if
+   ! Parameter 파일의 순서대로 index 할당 (column 위치 기반)
+   animal_field_idx = 1  ! SNPFile에서 첫 번째 필드가 ANIMAL_ID (column 1)
+   Animal_Field_Name = trim(SNPFile%FieldName(animal_field_idx))
+   if (trim(Animal_Field_Name) /= 'ANIMAL_ID' .and. trim(Animal_Field_Name) /= 'ANIMAL_ARN') then
+      stop 'ERROR: First SNP file field must be ANIMAL_ID or ANIMAL_ARN'
    end if
    print *, "Using field: ", trim(Animal_Field_Name)
    
@@ -120,22 +114,18 @@ program ReadFR
    countY = 0
    Previous_Animal = ''
    
-   ! Pre-calculate all field indices for performance optimization
-   ! This avoids ~256 million repeated find_field_index calls in the main loop
-   snp_name_idx = find_field_index('SNP_NAME', SNPFile%FieldName)
-   if (snp_name_idx == 0) then
-      print *, "ERROR: SNP_NAME field not found in parameter file"
-      stop
-   end if
+   ! Column 위치 기반 field indices - parameter 파일의 순서대로 설정
+   ! SNPFile%FieldLoc(i)에 실제 column 위치가 저장됨
+   ! Parameter 파일 순서: 1)ANIMAL_ID 2)SNP_NAME 3)CHR 4)POS 5)ALLELE1_AB 6)ALLELE2_AB 7)R_INTENSITY 8)GC_SCORE 9)GT_SCORE 10)CLUSTER_SEP 11)CALL_RATE
+   snp_name_idx = 2        ! SNP_NAME은 parameter의 2번째 항목 (column 5)
+   idx_allele1 = 5         ! ALLELE1_AB는 parameter의 5번째 항목 (column 11)
+   idx_allele2 = 6         ! ALLELE2_AB는 parameter의 6번째 항목 (column 12)
+   idx_r_intensity = 7     ! R_INTENSITY는 parameter의 7번째 항목 (column 25)
+   idx_gc_score = 8        ! GC_SCORE는 parameter의 8번째 항목 (column 27)
+   idx_gt_score = 9        ! GT_SCORE는 parameter의 9번째 항목 (column 30)
+   idx_cluster_sep = 10    ! CLUSTER_SEP는 parameter의 10번째 항목 (column 31)
    
-   idx_allele1 = find_field_index('ALLELE1_AB', SNPFile%FieldName)
-   idx_allele2 = find_field_index('ALLELE2_AB', SNPFile%FieldName)
-   idx_gc_score = find_field_index('GC_SCORE', SNPFile%FieldName)
-   idx_r_intensity = find_field_index('R_INTENSITY', SNPFile%FieldName)
-   idx_gt_score = find_field_index('GT_SCORE', SNPFile%FieldName)
-   idx_cluster_sep = find_field_index('CLUSTER_SEP', SNPFile%FieldName)
-   
-   print '(A)', "Field indices calculated - optimization enabled"
+   print '(A)', "Field indices set based on parameter file order - optimization enabled"
    
    do  ! Sequential read until EOF
       call readline(unitF, n, XC, XR, dlm_str=trim(SNPFile%Delim_char))
@@ -156,6 +146,7 @@ program ReadFR
                'Animal[', animal_seq_num, '] ',trim(PED_REC%ID), ' (',trim(PED_REC%BREED), &
                ') - Total SNPs: ', snp_count, ' Valid: ', (snp_count - count_miss), &
                ' Invalid: ', count_miss, ' CallRate: ', call_rate_animal, ' RETAINED'
+            call flush(6)  ! Force output to screen immediately
             write(unitGENO,'(A,1X,A,1X,A,1X,A,1X,I1,1X,I8,1X,A,1X)', advance='no') &
                trim(PED_REC%ID), trim(PED_REC%BREED), &
                trim(PED_REC%SIRE), trim(PED_REC%DAM), &
@@ -167,10 +158,11 @@ program ReadFR
          else
             animals_low_callrate = animals_low_callrate + 1
             ! Print animal statistics for excluded animal
-            print '(A,A,A,A,A,I6,A,I6,A,I6,A,F7.4,A)', &
-               'Animal   ',trim(PED_REC%ID), ' (',trim(PED_REC%BREED), &
+            print '(A,I4,A,A,A,A,A,I6,A,I6,A,I6,A,F7.4,A)', &
+               'Animal[', animal_seq_num, '] ',trim(PED_REC%ID), ' (',trim(PED_REC%BREED), &
                ') - Total SNPs: ', snp_count, ' Valid: ', (snp_count - count_miss), &
                ' Invalid: ', count_miss, ' CallRate: ', call_rate_animal, ' EXCLUDED (Low CallRate)'
+            call flush(6)  ! Force output to screen immediately
          end if
          invalid_snp_total = invalid_snp_total + count_miss
          GENO = 9_ki1
@@ -303,6 +295,7 @@ program ReadFR
             'Animal[', animal_seq_num, '] ',trim(PED_REC%ID), ' (',trim(PED_REC%BREED), &
             ') - Total SNPs: ', snp_count, ' Valid: ', (snp_count - count_miss), &
             ' Invalid: ', count_miss, ' CallRate: ', call_rate_animal, ' RETAINED'
+         call flush(6)  ! Force output to screen immediately
          write(unitGENO,'(A,1X,A,1X,A,1X,A,1X,I1,1X,I8,1X,A,1X)', advance='no') &
             trim(PED_REC%ID), trim(PED_REC%BREED), &
             trim(PED_REC%SIRE), trim(PED_REC%DAM), &
@@ -318,6 +311,7 @@ program ReadFR
             'Animal[', animal_seq_num, '] ',trim(PED_REC%ID), ' (',trim(PED_REC%BREED), &
             ') - Total SNPs: ', snp_count, ' Valid: ', (snp_count - count_miss), &
             ' Invalid: ', count_miss, ' CallRate: ', call_rate_animal, ' EXCLUDED (Low CallRate)'
+         call flush(6)  ! Force output to screen immediately
       end if
       invalid_snp_total = invalid_snp_total + count_miss
    end if
@@ -341,7 +335,7 @@ subroutine load_ped_file(PED, NARN, unitF, Animal_Field_Name)
    type(PEDHashTable), intent(out) :: PED
    integer, intent(out) :: NARN, unitF
    character(len=*), intent(in) :: Animal_Field_Name
-   integer :: nrec_in_file, i, n
+   integer :: i, n
    
    NARN = N_recf(PEDFile%FileName)
    NARN = NARN - PEDFile%Header
@@ -360,9 +354,9 @@ subroutine load_ped_file(PED, NARN, unitF, Animal_Field_Name)
        call readline(unitF,n,XC,XI,dlm_str=trim(PEDFile%Delim_char))
        if(n < 0) exit
        call init_Ped(PED_REC)
-       PED_REC%BREED= trim(XC(PEDFile%FieldLoc(find_field_index('BREED',PEDFile%FieldName))))
-       PED_REC%ID   = trim(XC(PEDFile%FieldLoc(find_field_index('ID',PEDFile%FieldName))))
-       PED_REC%ARN  = trim(XC(PEDFile%FieldLoc(find_field_index('ARN',PEDFile%FieldName))))
+       PED_REC%BREED= trim(XC(PEDFile%FieldLoc(1)))  ! Column 위치 기반: BREED는 1번 항목
+       PED_REC%ID   = trim(XC(PEDFile%FieldLoc(2)))  ! Column 위치 기반: ID는 2번 항목 (parameter에서 2번째)
+       PED_REC%ARN  = trim(XC(PEDFile%FieldLoc(3)))  ! Column 위치 기반: ARN은 3번 항목 (parameter에서 3번째)
        
        ! Determine hash key based on Animal_Field_Name parameter
        if (trim(Animal_Field_Name) == 'ANIMAL_ARN') then
@@ -375,12 +369,12 @@ subroutine load_ped_file(PED, NARN, unitF, Animal_Field_Name)
            cycle  ! Skip if field name unknown
        end if
        
-       PED_REC%SIRE = trim(XC(PEDFile%FieldLoc(find_field_index('SIRE',PEDFile%FieldName))))
-       PED_REC%DAM  = trim(XC(PEDFile%FieldLoc(find_field_index('DAM',PEDFile%FieldName))))
-       PED_REC%SEX  = XI(PEDFile%FieldLoc(find_field_index('SEX',PEDFile%FieldName)))      
-       PED_REC%BDate= XI(PEDFile%FieldLoc(find_field_index('BDate',PEDFile%FieldName)))    
+       PED_REC%SIRE = trim(XC(PEDFile%FieldLoc(4)))  ! Column 위치 기반: SIRE는 4번 항목 (parameter에서 4번째)
+       PED_REC%DAM  = trim(XC(PEDFile%FieldLoc(5)))  ! Column 위치 기반: DAM은 5번 항목 (parameter에서 5번째)
+       PED_REC%SEX  = XI(PEDFile%FieldLoc(6))        ! Column 위치 기반: SEX는 6번 항목 (parameter에서 6번째)
+       PED_REC%BDate= XI(PEDFile%FieldLoc(7))        ! Column 위치 기반: BDATE는 7번 항목 (parameter에서 7번째)
        ! Read LOC field as text string
-       PED_REC%LOC  = adjustl(trim(XC(PEDFile%FieldLoc(find_field_index('LOC',PEDFile%FieldName)))))
+       PED_REC%LOC  = adjustl(trim(XC(PEDFile%FieldLoc(8))))  ! Column 위치 기반: LOC은 8번 항목 (parameter에서 8번째)
        call pht_insert_with_key(PED, PED_REC, Animal_Field_Name)
    end do
    close(unit=unitF)
@@ -412,13 +406,13 @@ subroutine load_map_file(MapInfo, tSNP, unitF)
    
    do i=1,tSNP
        call readline(unitF,n,XC,XI,dlm_str=trim(MAPFile%Delim_char))
-       MapInfo(i)%SNP_ID    = trim(XC(MAPFile%FieldLoc(find_field_index('SNP_ID',MAPFile%FieldName))))
-       MapInfo(i)%Chr       = XI(MAPFile%FieldLoc(find_field_index('Chr',MAPFile%FieldName)))
-       MapInfo(i)%Pos       = XI(MAPFile%FieldLoc(find_field_index('Pos',MAPFile%FieldName)))
+       MapInfo(i)%SNP_ID    = trim(XC(MAPFile%FieldLoc(1)))  ! Column 위치 기반: SNP_ID는 1번 항목 (parameter에서 1번째)
+       MapInfo(i)%Chr       = XI(MAPFile%FieldLoc(2))         ! Column 위치 기반: CHR은 2번 항목 (parameter에서 2번째)
+       MapInfo(i)%Pos       = XI(MAPFile%FieldLoc(3))         ! Column 위치 기반: POS는 3번 항목 (parameter에서 3번째)
        ! ARRAY_ALL: Address_Total (전체 SNP을 Chr, Position으로 순서화 - 모든 염색체 통합)
        ! ARRAY_CHR: Address_Chr (염색체 내에서 nested 순서화)
-       MapInfo(i)%Array_All = XI(MAPFile%FieldLoc(find_field_index('ARRAY_ALL',MAPFile%FieldName)))
-       MapInfo(i)%Array_Chr = XI(MAPFile%FieldLoc(find_field_index('ARRAY_CHR',MAPFile%FieldName)))
+       MapInfo(i)%Array_All = XI(MAPFile%FieldLoc(4))         ! Column 위치 기반: ARRAY_ALL은 4번 항목 (parameter에서 4번째)
+       MapInfo(i)%Array_Chr = XI(MAPFile%FieldLoc(5))         ! Column 위치 기반: ARRAY_CHR은 5번 항목 (parameter에서 5번째)
    end do
    close(unit=unitF)
    
@@ -454,250 +448,10 @@ subroutine get_snp_dimensions(SNPFile, unitF, nSNP, NREC)
    print*,"number of SNP=", nSNP
    print*,"number of Animals=", NREC
 end subroutine get_snp_dimensions
-! Initialize global QC statistics
-subroutine initialize_qc_variables(total_animals, animals_retained, &
-                                   animals_low_callrate, global_qc_counters)
-   integer, intent(out) :: total_animals, animals_retained, animals_low_callrate
-   type(QC_Counters), intent(out) :: global_qc_counters
-   
-   total_animals = 0
-   animals_retained = 0
-   animals_low_callrate = 0
-   global_qc_counters%fail_gc = 0
-   global_qc_counters%fail_r = 0
-   global_qc_counters%fail_gt = 0
-   global_qc_counters%fail_cluster = 0
-   global_qc_counters%fail_allele = 0
-   global_qc_counters%fail_chr = 0
-end subroutine initialize_qc_variables
-! Initialize per-animal variables
-subroutine initialize_animal_variables(Animal_ID, genotype, count_miss, &
-                                       countX, countY, snp_count, local_qc_counters)
-   character(len=*), intent(out) :: Animal_ID
-   integer(kind=ki1), intent(out) :: genotype
-   integer, intent(out) :: count_miss, snp_count
-   integer, intent(out) :: countX(3), countY(3)
-   type(QC_Counters), intent(out) :: local_qc_counters
-   
-   Animal_ID = '***'
-   genotype = 9_ki1
-   count_miss = 0
-   countX = 0
-   countY = 0
-   snp_count = 0
-   local_qc_counters%fail_gc = 0
-   local_qc_counters%fail_r = 0
-   local_qc_counters%fail_gt = 0
-   local_qc_counters%fail_cluster = 0
-   local_qc_counters%fail_allele = 0
-   local_qc_counters%fail_chr = 0
-end subroutine initialize_animal_variables
 
 ! =========================================================================
-! 6. QC 기준 출력
 ! =========================================================================
-subroutine print_qc_criteria()
-   implicit none
-   
-   print*,""
-   print*,"="//repeat("=",70)
-   print*,"Starting SNP Quality Control with configured criteria:"
-   print '(A,F5.2)', "  - GC Score >= ", thresh_min_gc
-   print '(A,F4.2,A,F4.2)', "  - R (Intensity) ", thresh_min_r, " - ", thresh_max_r
-   print '(A,F5.2)', "  - GT Score >= ", thresh_min_gt
-   print '(A,F5.2)', "  - Cluster Separation >= ", thresh_min_cluster
-   print '(A,F5.2)', "  - Animal Call Rate >= ", thresh_min_callrate
-   print*,"="//repeat("=",70)
-   print*,""
-end subroutine print_qc_criteria
-
-! =========================================================================
-! 7. 동물 ID 추출
-! =========================================================================
-subroutine extract_animal_id(Animal_ARN, Animal_ID, PED_REC, PED, SNPFile, XC)
-   character(len=*), intent(out) :: Animal_ARN, Animal_ID
-   type(PEDInfo), intent(inout) :: PED_REC
-   type(PEDHashTable), intent(in) :: PED
-   type(FileInfo), intent(in) :: SNPFile
-   character(len=*), intent(in) :: XC(:)
-   
-   if(find_field_index('ANIMAL_ID', SNPFile%FieldName) == -1) then
-      Animal_ARN = trim(XC(SNPFile%FieldLoc(find_field_index('ANIMAL_ARN',SNPFile%FieldName))))
-      call init_Ped(PED_REC)
-      if(pht_search(PED, Animal_ARN, PED_REC)) then
-         Animal_ID = trim(PED_REC%ID)
-      else
-         Animal_ID = trim(XC(SNPFile%FieldLoc(find_field_index('ANIMAL_ARN',SNPFile%FieldName))))
-      end if
-   else
-      Animal_ID = trim(XC(SNPFile%FieldLoc(find_field_index('ANIMAL_ID',SNPFile%FieldName))))
-   end if
-end subroutine extract_animal_id
-
-! =========================================================================
-! 8. 대립유전자 추출 및 유전자형 결정
-! =========================================================================
-subroutine extract_alleles_and_genotype(Allele1, Allele2, temp_str, genotype, &
-                                        SNPFile, XC, k1, k2)
-   character(len=1), intent(out) :: Allele1, Allele2
-   character(len=*), intent(out) :: temp_str
-   integer(kind=ki1), intent(out) :: genotype
-   type(FileInfo), intent(in) :: SNPFile
-   character(len=*), intent(in) :: XC(:)
-   integer, intent(out) :: k1, k2
-   
-   Allele1 = ' '
-   Allele2 = ' '
-   
-   k1 = SNPFile%FieldLoc(find_field_index('Allele1_AB', SNPFile%FieldName))
-   if (len_trim(XC(k1)) > 0) then
-      temp_str = trim(XC(k1))
-      Allele1 = temp_str(1:1)
-   end if   
-   
-   k2 = SNPFile%FieldLoc(find_field_index('Allele2_AB', SNPFile%FieldName))
-   if (len_trim(XC(k2)) > 0) then
-      temp_str = trim(XC(k2))
-      Allele2 = temp_str(1:1)
-   end if
-   
-   genotype = SeekGeno(Allele1, Allele2)
-end subroutine extract_alleles_and_genotype
-
-! =========================================================================
-! 9. SNP QC 필터 적용 - 동적 컬럼 위치 기반 (매개변수 간소화)
-! =========================================================================
-subroutine apply_snp_qc_filters(out_metrics, out_counters, MapInfo, &
-                                XR, SNPFile, Allele1, Allele2, genotype, j)
-   implicit none
-   type(QC_Metrics), intent(out) :: out_metrics
-   type(QC_Counters), intent(inout) :: out_counters
-   type(SNPInfo), intent(in) :: MapInfo(:)
-   real(kind=r4), intent(in) :: XR(:)
-   type(FileInfo), intent(in) :: SNPFile
-   character(len=1), intent(in) :: Allele1, Allele2
-   integer(kind=ki1), intent(in) :: genotype
-   integer, intent(in) :: j
-   integer :: col_gc, col_ri, col_gt, col_cs, idx_gc, idx_ri, idx_gt, idx_cs
-   
-   ! 동적으로 컬럼 위치 찾기 (파라미터 파일에서 지정된 위치 사용)
-   idx_gc = find_field_index('GC_Score', SNPFile%FieldName)
-   idx_ri = find_field_index('R_Intensity', SNPFile%FieldName)
-   idx_gt = find_field_index('GT_Score', SNPFile%FieldName)
-   idx_cs = find_field_index('Cluster_Sep', SNPFile%FieldName)
-   
-   ! 유효한 인덱스 확인 (find_field_index가 -1 반환하는 경우 처리)
-   if(idx_gc > 0 .and. idx_gc <= size(SNPFile%FieldLoc)) then
-      col_gc = SNPFile%FieldLoc(idx_gc)
-   else
-      col_gc = 27  ! GC_Score 기본값
-   end if
-   
-   if(idx_ri > 0 .and. idx_ri <= size(SNPFile%FieldLoc)) then
-      col_ri = SNPFile%FieldLoc(idx_ri)
-   else
-      col_ri = 25  ! R-Intensity 기본값
-   end if
-   
-   if(idx_gt > 0 .and. idx_gt <= size(SNPFile%FieldLoc)) then
-      col_gt = SNPFile%FieldLoc(idx_gt)
-   else
-      col_gt = 29  ! GT_Score 기본값
-   end if
-   
-   if(idx_cs > 0 .and. idx_cs <= size(SNPFile%FieldLoc)) then
-      col_cs = SNPFile%FieldLoc(idx_cs)
-   else
-      col_cs = 30  ! Cluster_Sep 기본값
-   end if
-   
-   ! Extract QC metrics from FinalReport (동적 컬럼 위치 사용)
-   ! column 범위 확인
-   if(col_gc > 0 .and. col_gc <= size(XR)) then
-      out_metrics%gc_score = XR(col_gc)
-   else
-      out_metrics%gc_score = 0.0_r4
-   end if
-   
-   if(col_ri > 0 .and. col_ri <= size(XR)) then
-      out_metrics%r_value = XR(col_ri)
-   else
-      out_metrics%r_value = 0.0_r4
-   end if
-   
-   if(col_gt > 0 .and. col_gt <= size(XR)) then
-      out_metrics%gt_score = XR(col_gt)
-   else
-      out_metrics%gt_score = 0.0_r4
-   end if
-   
-   if(col_cs > 0 .and. col_cs <= size(XR)) then
-      out_metrics%cluster_sep = XR(col_cs)
-   else
-      out_metrics%cluster_sep = 0.0_r4
-   end if
-   
-   out_metrics%pass_qc = .true.
-   
-   ! 1. GC Score check
-   if(out_metrics%gc_score < thresh_min_gc) then
-      out_metrics%pass_qc = .false.
-      out_counters%fail_gc = out_counters%fail_gc + 1
-   end if
-   
-   ! 2. Intensity (R) check
-   if(out_metrics%r_value < thresh_min_r .or. &
-      out_metrics%r_value > thresh_max_r) then
-      out_metrics%pass_qc = .false.
-      out_counters%fail_r = out_counters%fail_r + 1
-   end if
-   
-   ! 3. GT Score check
-   if(out_metrics%gt_score < thresh_min_gt) then
-      out_metrics%pass_qc = .false.
-      out_counters%fail_gt = out_counters%fail_gt + 1
-   end if
-   
-   ! 4. Cluster Separation check
-   if(out_metrics%cluster_sep < thresh_min_cluster) then
-      out_metrics%pass_qc = .false.
-      out_counters%fail_cluster = out_counters%fail_cluster + 1
-   end if
-   
-   ! 5. Allele validation
-   if(Allele1 == ' ' .or. Allele2 == ' ') then
-      out_metrics%pass_qc = .false.
-      out_counters%fail_allele = out_counters%fail_allele + 1
-   end if
-   
-   ! 6. Chromosome filter (1-21 for pig)
-   if(MapInfo(j)%Chr < 1 .or. MapInfo(j)%Chr > 21) then
-      out_metrics%pass_qc = .false.
-      out_counters%fail_chr = out_counters%fail_chr + 1
-   end if
-end subroutine apply_snp_qc_filters
-
-! =========================================================================
-! 10. 유전자형 저장
-! =========================================================================
-subroutine store_genotype(GENO, MapInfo, genotype, pass_QC, j, count_miss)
-   integer(kind=ki1), intent(inout) :: GENO(:)
-   type(SNPInfo), intent(in) :: MapInfo(:)
-   integer(kind=ki1), intent(in) :: genotype
-   logical, intent(in) :: pass_QC
-   integer, intent(in) :: j
-   integer, intent(inout) :: count_miss
-   
-   if(genotype == 9_ki1 .or. .not. pass_QC) then
-      GENO(MapInfo(j)%Array_All) = 9_ki1    ! Missing
-      count_miss = count_miss + 1
-   else
-      GENO(MapInfo(j)%Array_All) = genotype
-   end if
-end subroutine store_genotype
-
-! =========================================================================
-! 11. Call Rate 계산
+! 7. Call Rate 계산
 ! =========================================================================
 subroutine calculate_call_rate(snp_count, count_miss, call_rate_animal)
    integer, intent(in) :: snp_count, count_miss
@@ -711,173 +465,7 @@ subroutine calculate_call_rate(snp_count, count_miss, call_rate_animal)
 end subroutine calculate_call_rate
 
 ! =========================================================================
-! 12. 동물별 통계 출력 및 필터링
-! =========================================================================
-subroutine print_animal_statistics(i, Animal_ID, total_animals, animals_retained, &
-                                   animals_low_callrate, call_rate_animal, &
-                                   snp_count, count_miss, countX, countY, &
-                                   countY_hetero_errors, GENO, PED_REC, unitGENO, nSNP)
-   implicit none
-   integer, intent(in) :: i, snp_count, count_miss, unitGENO, nSNP
-   character(len=*), intent(in) :: Animal_ID
-   integer, intent(inout) :: total_animals, animals_retained, animals_low_callrate
-   real, intent(in) :: call_rate_animal
-   integer, intent(in) :: countX(3), countY(3)
-   integer, intent(in) :: countY_hetero_errors
-   integer(kind=ki1), intent(in) :: GENO(:)
-   type(PEDInfo), intent(in) :: PED_REC
-   
-   integer :: total_X_snps, total_Y_snps, j
-   real :: x_hetero_ratio
-   integer :: genomic_sex, ped_sex_match
-   character(len=10) :: sex_str, genomic_sex_str, match_str
-   
-   !============================================
-   !동물 처리 기본 정보 출력
-   !============================================
-   if(mod(i,100) == 1) then
-      print*, ""
-      print '(A,I5,2x,A,A,2x,A,F6.3,2x,A,I6,2x,A,I6)', "Animal #", i, "ID: ", trim(Animal_ID), &
-            "Call Rate: ", call_rate_animal, "  Total SNPs: ", snp_count, "Missing SNPs: ", count_miss
-   end if
-
-   total_animals = total_animals + 1
-   
-   ! Call Rate 필터 (parameter에서 설정된 값 사용) - 낮은 개체 삭제
-   if(call_rate_animal < thresh_min_callrate) then
-      animals_low_callrate = animals_low_callrate + 1
-      print '(A,I5,A,A,A,F6.3,A,F5.2)', "  [EXCLUDED] Animal #", i, " ID: ", &
-            trim(Animal_ID), " - Low Call Rate: ", call_rate_animal, " < ", thresh_min_callrate
-      return
-   end if
-   
-   animals_retained = animals_retained + 1
-   
-   ! ============================================
-   ! GENO와 혈통정보를 파일에 저장 (QC 통과 개체만)
-   ! ============================================
-   write(unitGENO,'(A)', advance='no') trim(Animal_ID) // ' '
-   write(unitGENO,'(A)', advance='no') trim(PED_REC%BREED) // ' '
-   write(unitGENO,'(A)', advance='no') trim(PED_REC%SIRE) // ' '
-   write(unitGENO,'(A)', advance='no') trim(PED_REC%DAM) // ' '
-   write(unitGENO,'(I1,A)', advance='no') PED_REC%SEX, ' '
-   write(unitGENO,'(I8,A)', advance='no') PED_REC%BDate, ' '
-   ! Output LOC field (text format) - remove null characters
-   temp_str = adjustl(trim(PED_REC%LOC))
-   write(unitGENO,'(A)', advance='no') trim(temp_str) // ' '
-   do j=1,nSNP
-      write(unitGENO,'(I1)', advance='no') GENO(j)
-   end do
-   write(unitGENO,'(A)') ''  ! New line
-   
-   ! ============================================
-   ! X 염색체 기반 성별 예측 (정보만 표시)
-   ! ============================================
-   total_X_snps = countX(1) + countX(2) + countX(3)
-   if(total_X_snps > 0) then
-      x_hetero_ratio = real(countX(2)) / real(total_X_snps)
-      
-      ! 이질 접합 비율로 성별 판정 (임계값 0.30)
-      if(x_hetero_ratio > 0.30) then
-         genomic_sex = MALE  ! 수컷 (XY): 높은 이질 접합 비율
-      else
-         genomic_sex = MALE + 1  ! 암컷 (XX): 낮은 이질 접합 비율 (2 = 암컷으로 사용)
-      end if
-      
-      ! PED 성별과 비교
-      if(genomic_sex == PED_REC%SEX) then
-         ped_sex_match = 1
-         match_str = "MATCH"
-      else
-         ped_sex_match = 0
-         match_str = "MISMATCH"
-      end if
-      
-      ! 성별 문자열 설정
-      if(genomic_sex == MALE) then
-         genomic_sex_str = "MALE"
-      else
-         genomic_sex_str = "FEMALE"
-      end if
-      if(PED_REC%SEX == MALE) then
-         sex_str = "MALE"
-      else
-         sex_str = "FEMALE"
-      end if
-      
-      ! ! 성별 판정 결과 출력 (정보만 표시, 동물 제외하지 않음)
-      ! print '(A,F6.4,A,I5,A,I5,A,I5)', &
-      !       "  X_Chromosome: HeteroRatio=", x_hetero_ratio, &
-      !       " (0/1/2)=", countX(1), "/", countX(2), "/", countX(3)
-      ! print '(A,A,A,A,A,A)', "  Genomic Sex: ", trim(genomic_sex_str), &
-      !       " | PED Sex: ", trim(sex_str), " | Result: ", trim(match_str)
-   end if
-   
-   ! ! ============================================
-   ! ! Y 염색체 이질 접합 오류 보고 (정보만 표시)
-   ! ! ============================================
-   ! if(countY_hetero_errors > 0) then
-   !    print '(A,I5,A,I5,A)', "  [Y_CHR_INFO] Animal #", i, &
-   !          " - Y chromosome heterozygous SNPs marked as missing: ", countY_hetero_errors, &
-   !          " (These are biological errors and marked as missing data)"
-   ! end if
-   
-   ! total_Y_snps = countY(1) + countY(2) + countY(3)
-   ! if(total_Y_snps > 0) then
-   !    print '(A,I5,A,I5,A,I5)', "  Y_Chromosome: SNP counts (0/1/2)=", &
-   !          countY(1), "/", countY(2), "/", countY(3)
-   ! end if
-end subroutine print_animal_statistics
-
-! =========================================================================
-! 13. 글로벌 QC 통계 누적
-! =========================================================================
-subroutine accumulate_global_qc_stats(global_qc_counters, local_qc_counters, &
-                                     call_rate_animal)
-   implicit none
-   type(QC_Counters), intent(inout) :: global_qc_counters
-   type(QC_Counters), intent(in) :: local_qc_counters
-   real, intent(in) :: call_rate_animal
-   
-   ! Call Rate 필터에 통과한 동물만 누적
-   if(call_rate_animal >= 0.70_r4) then
-      global_qc_counters%fail_gc = global_qc_counters%fail_gc + local_qc_counters%fail_gc
-      global_qc_counters%fail_r = global_qc_counters%fail_r + local_qc_counters%fail_r
-      global_qc_counters%fail_gt = global_qc_counters%fail_gt + local_qc_counters%fail_gt
-      global_qc_counters%fail_cluster = global_qc_counters%fail_cluster + local_qc_counters%fail_cluster
-      global_qc_counters%fail_allele = global_qc_counters%fail_allele + local_qc_counters%fail_allele
-      global_qc_counters%fail_chr = global_qc_counters%fail_chr + local_qc_counters%fail_chr
-   end if
-end subroutine accumulate_global_qc_stats
-
-! =========================================================================
-! 14. 최종 QC 요약 출력
-! =========================================================================
-subroutine print_qc_summary(total_animals, animals_retained, animals_low_callrate, &
-                            global_qc_counters)
-   integer, intent(in) :: total_animals, animals_retained, animals_low_callrate
-   type(QC_Counters), intent(in) :: global_qc_counters
-   
-   print*,""
-   print*,"="//repeat("=",70)
-   print*,"SNP QUALITY CONTROL SUMMARY"
-   print*,"="//repeat("=",70)
-   print*,"Total Animals Processed:       ", total_animals
-   print*,"Animals Excluded (Low Call):   ", animals_low_callrate
-   print*,"Animals Retained:              ", animals_retained
-   print*,""
-   print*,"QC Failures by Criterion (Aggregate) [with empirical thresholds]:"
-   print*,"  - GC Score < 0.65:           ", global_qc_counters%fail_gc
-   print*,"  - R out of range 0.4-2.0:    ", global_qc_counters%fail_r
-   print*,"  - GT Score < 0.50:           ", global_qc_counters%fail_gt
-   print*,"  - Cluster Sep < 0.30:        ", global_qc_counters%fail_cluster
-   print*,"  - Missing Alleles:           ", global_qc_counters%fail_allele
-   print*,"  - Invalid Chromosome:        ", global_qc_counters%fail_chr
-   print*,"="//repeat("=",70)
-end subroutine print_qc_summary
-
-! =========================================================================
-! 15. 성염색체 검증 (기존 부프로그램)
+! 8. 성염색체 검증 (기존 부프로그램)
 ! =========================================================================
 subroutine check_Sex(Sex_Genotype, cnt)
    integer(kind=ki1), intent(in) :: Sex_Genotype
@@ -896,41 +484,6 @@ subroutine check_Sex(Sex_Genotype, cnt)
       end select
    end if
 end subroutine Check_Sex
-
-subroutine init_rng()
-  implicit none
-  integer :: seed_size, iseed
-  integer, allocatable :: seed(:)
-
-  call random_seed(size=seed_size)
-  allocate(seed(seed_size))
-  do iseed = 1, seed_size
-     seed(iseed) = int(1000.0 * real(iseed) + 12345)
-  end do
-  call random_seed(put=seed)
-  deallocate(seed)
-end subroutine init_rng
-
-integer function rand_int(a, b)
-  implicit none
-  integer, intent(in) :: a, b
-  real :: r
-  call random_number(r)  ! r in [0,1)
-  rand_int = a + int(r * real(b - a + 1))
-end function rand_int   
-
-integer function find_field_index(str,FieldName)
-   character(len=*), intent(in) :: str
-   character(len=*), dimension(:), intent(in) :: FieldName
-   integer :: idx
-      find_field_index = -1
-      do idx=1,size(FieldName)
-         if(trim(to_upper(str)) == trim(to_upper(FieldName(idx)))) then
-            find_field_index = idx
-            return
-         end if
-      end do
-end function find_field_index
 
 logical function check_SNP_ID(ID1, ID2)
   implicit none
@@ -972,10 +525,13 @@ subroutine generate_output_filename(GenoFileName)
   implicit none
   character(len=*), intent(out) :: GenoFileName
   character(len=10) :: date_str
-  character(len=5) :: time_str
+
   integer :: values(8)
   integer :: seq_num
   character(len=MAX_STR) :: test_filename
+  character(len=6) :: input_prefix
+  character(len=MAX_STR) :: basename
+  integer :: pos_slash, pos_dot, basename_len
   logical :: file_exists
   
   ! Get current date and time
@@ -984,10 +540,33 @@ subroutine generate_output_filename(GenoFileName)
   ! Format as YYYYMMDD
   write(date_str, '(I4.4,I2.2,I2.2)') values(1), values(2), values(3)
   
+  ! Extract first 6 characters from input filename (basename only, not full path)
+  basename = trim(SNPFile%FileName)
+  
+  ! Remove path - find last '/' or '\'
+  pos_slash = index(basename, '/', back=.true.)
+  if (pos_slash > 0) then
+     basename = basename(pos_slash+1:)
+  end if
+  
+  ! Remove extension - find last '.'
+  pos_dot = index(basename, '.', back=.true.)
+  if (pos_dot > 0) then
+     basename = basename(1:pos_dot-1)
+  end if
+  
+  ! Get first 6 characters (or less if basename is shorter)
+  basename_len = len_trim(basename)
+  if (basename_len >= 6) then
+     input_prefix = basename(1:6)
+  else
+     input_prefix = basename(1:basename_len)
+  end if
+  
   ! Try sequence numbers from 00 to 99
   do seq_num = 0, 99
-     write(test_filename, '(A,A,A,A,I2.2,A)') &
-        trim(OutputPrefix), '_', trim(date_str), '_', seq_num, '.geno'
+     write(test_filename, '(A,A,A,A,A,A,I2.2,A)') &
+        trim(OutputPrefix), '_', trim(input_prefix), '_', trim(date_str), '_', seq_num, '.geno'
      inquire(file=trim(test_filename), exist=file_exists)
      if (.not. file_exists) then
         GenoFileName = trim(test_filename)
@@ -996,8 +575,8 @@ subroutine generate_output_filename(GenoFileName)
   end do
   
   ! If all numbered files exist (rare), use default
-  write(GenoFileName, '(A,A,A,A)') &
-     trim(OutputPrefix), '_', trim(date_str), '_99.geno'
+  write(GenoFileName, '(A,A,A,A,A,A)') &
+     trim(OutputPrefix), '_', trim(input_prefix), '_', trim(date_str), '_99.geno'
   
 end subroutine generate_output_filename
 
